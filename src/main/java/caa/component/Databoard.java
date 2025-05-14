@@ -2,10 +2,13 @@ package caa.component;
 
 import burp.api.montoya.MontoyaApi;
 import caa.Config;
+import caa.component.generator.Generator;
 import caa.component.member.DatatablePanel;
-import caa.component.utils.UITools;
+import caa.component.member.DisplayMode;
 import caa.instances.Database;
 import caa.utils.ConfigLoader;
+import caa.utils.HttpUtils;
+import caa.utils.UITools;
 
 import javax.swing.*;
 import javax.swing.event.DocumentEvent;
@@ -15,23 +18,24 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.*;
 
 public class Databoard extends JPanel {
+    private static Boolean isMatchHost = false;
+
+    private final MontoyaApi api;
+    private final Database db;
+    private final ConfigLoader configLoader;
+    private final Generator generator;
+    private final String defaultText = "Please enter the host";
+    private final DefaultComboBoxModel comboBoxModel = new DefaultComboBoxModel();
+    private final JComboBox hostComboBox = new JComboBox(comboBoxModel);
+    private Map<String, List<String>> hostCache = new HashMap<>();
     private JTextField hostTextField;
     private JComboBox<String> tableComboBox;
     private JComboBox<String> limitComboBox;
     private JPanel dataPanel;
-    private final MontoyaApi api;
-    private final Database db;
-    private final ConfigLoader configLoader;
-    private final String defaultText = "Please enter the host";
-
-    private static Boolean isMatchHost = false;
-    private final DefaultComboBoxModel comboBoxModel = new DefaultComboBoxModel();
-    private final JComboBox hostComboBox = new JComboBox(comboBoxModel);
     private SwingWorker<Object, Void> handleComboBoxWorker;
 
     private String previousHostText = "";
@@ -58,10 +62,12 @@ public class Databoard extends JPanel {
         }
     };
 
-    public Databoard(MontoyaApi api, Database db, ConfigLoader configLoader) {
+    public Databoard(MontoyaApi api, Database db, ConfigLoader configLoader, Generator generator) {
         this.api = api;
         this.db = db;
         this.configLoader = configLoader;
+        this.generator = generator;
+
         initComponents();
     }
 
@@ -81,19 +87,19 @@ public class Databoard extends JPanel {
         limitComboBox.setModel(new DefaultComboBoxModel<>(new String[]{
                 "100",
                 "1000",
-                "10000"
+                "10000",
+                "100000"
         }));
 
         // 添加选项监听器
         tableComboBox.addActionListener(actionListener);
         limitComboBox.addActionListener(actionListener);
 
-
         hostTextField = new JTextField();
         hostTextField.setText(defaultText);
         hostTextField.setForeground(Color.GRAY);
 
-        UITools.addPlaceholder(hostTextField, defaultText);
+        UITools.setTextFieldPlaceholder(hostTextField, defaultText);
 
         dataPanel = new JPanel();
         dataPanel.setLayout(new BorderLayout());
@@ -186,6 +192,7 @@ public class Databoard extends JPanel {
                     @Override
                     protected Object doInBackground() {
                         String limitSize = limitComboBox.getSelectedItem().toString();
+                        dataPanel.removeAll();
                         return db.selectData(selectedHost.equals("*") ? "" : selectedHost, tableName, limitSize);
                     }
 
@@ -199,11 +206,13 @@ public class Databoard extends JPanel {
                                     List<String> columnNameB = new ArrayList<>();
                                     columnNameB.add("Name");
                                     columnNameB.add("Value");
-                                    dataPanel.add(new DatatablePanel(api, db, configLoader, columnNameB, selectedObject, null, tableName), BorderLayout.CENTER);
+                                    columnNameB.add("Count");
+                                    dataPanel.add(new DatatablePanel(api, db, configLoader, generator, columnNameB, selectedObject, null, tableName, DisplayMode.COUNT), BorderLayout.CENTER);
                                 } else {
                                     List<String> columnNameA = new ArrayList<>();
                                     columnNameA.add("Name");
-                                    dataPanel.add(new DatatablePanel(api, db, configLoader, columnNameA, selectedObject, null, tableName), BorderLayout.CENTER);
+                                    columnNameA.add("Count");
+                                    dataPanel.add(new DatatablePanel(api, db, configLoader, generator, columnNameA, selectedObject, null, tableName, DisplayMode.COUNT), BorderLayout.CENTER);
                                 }
 
                                 if (!selectedHost.equals(previousHostText)) {
@@ -218,13 +227,43 @@ public class Databoard extends JPanel {
 
                 handleComboBoxWorker.execute();
             }
-
-
         }
     }
 
     private List<String> getHostByList(String tableName) {
-        return db.getAllHosts(tableName);
+        // 先从缓存中查找
+        if (hostCache.containsKey(tableName)) {
+            return hostCache.get(tableName);
+        }
+
+        // 缓存中没有，则查询数据库
+        List<String> hosts = db.getAllHosts(tableName);
+        hosts = new ArrayList<>(new HashSet<>(hosts)); // 去重
+
+        // 用于暂存新生成的 anyHost
+        List<String> newAnyHosts = new ArrayList<>();
+
+        // 添加通配符Host
+        for (String host : hosts) {
+            if (!HttpUtils.matchHostIsIp(host)) {
+                String[] splitHost = host.split("\\.");
+                if (splitHost.length > 2) {
+                    String anyHost = HttpUtils.replaceFirstOccurrence(host, splitHost[0], "*");
+                    if (!anyHost.isEmpty()) {
+                        newAnyHosts.add(anyHost);
+                    }
+                }
+            }
+        }
+
+        // 统一添加所有新生成的 anyHost
+        hosts.addAll(newAnyHosts);
+
+        // 再次去重
+        hosts = new ArrayList<>(new HashSet<>(hosts));
+
+        hostCache.put(tableName, hosts);
+        return hosts;
     }
 
     private void handleKeyEvents(KeyEvent e) {

@@ -53,23 +53,50 @@ public class Database {
         }
     }
 
+    private static String getSql(String tableName, String limitSize, boolean isLikeQuery) {
+        String sql;
+        // 模糊查询
+        if (isLikeQuery) {
+            sql = "SELECT name%s,SUM(count) AS count FROM `" + tableName + "` %s GROUP BY name%s HAVING COUNT(*) > 0 ORDER BY count DESC";
+        } else {
+            sql = "SELECT name%s,count FROM `" + tableName + "` %s ORDER BY count DESC";
+        }
+
+        if (!limitSize.isBlank()) {
+            sql += " LIMIT " + limitSize;
+        }
+
+        if (tableName.contains("All")) {
+            sql = String.format(sql, "", "");
+        } else if (tableName.equals("Value")) {
+            if (isLikeQuery) {
+                sql = String.format(sql, ",value", "WHERE host like ?", ",value");
+            } else {
+                sql = String.format(sql, ",value", "WHERE host = ?");
+            }
+        } else {
+            if (isLikeQuery) {
+                sql = String.format(sql, "", "WHERE host like ?", "");
+            } else {
+                sql = String.format(sql, "", "WHERE host = ?");
+            }
+        }
+        return sql;
+    }
+
     public Object selectData(String host, String tableName, String limitSize) {
         try {
             if (!connection.isClosed()) {
-                String sql = "select name%s from `" + tableName + "` %s order by count desc";
-                if (!limitSize.isBlank()) {
-                    sql += " limit " + limitSize;
-                }
-                if (tableName.contains("All")) {
-                    sql = String.format(sql, "", "");
-                } else if (tableName.equals("Value")) {
-                    sql = String.format(sql, ",value", "where host = ?");
-                } else {
-                    sql = String.format(sql, "", "where host = ?");
-                }
+                boolean isLikeQuery = host.contains("*.");
+
+                String sql = getSql(tableName, limitSize, isLikeQuery);
 
                 PreparedStatement ps = connection.prepareStatement(sql);
-                prepareStatement(host, ps);
+                if (isLikeQuery) {
+                    ps.setString(1, "%" + host.replace("*.", "."));
+                } else if (!host.isEmpty()) {
+                    ps.setString(1, host);
+                }
                 ResultSet rs = ps.executeQuery();
 
                 // 判断结果集是否为空
@@ -81,22 +108,26 @@ public class Database {
                         while (rs.next()) {
                             String key = rs.getString(1);
                             String value = rs.getString(2);
-                            multimap.put(key, value);
+                            int count = rs.getInt(3);
+                            // 将 count 和 value 组合成一个字符串
+                            String combinedValue = String.format("%d|%s", count, value);
+                            multimap.put(key, combinedValue);
                         }
                         if (multimap.size() <= 0) {
                             return null;
                         }
                         return multimap;
                     } else {
-                        Set<String> resultList = new LinkedHashSet<>();
+                        Map<String, Integer> resultMap = new LinkedHashMap<>();
                         while (rs.next()) {
                             String columnValue = rs.getString(1);
-                            resultList.add(columnValue);
+                            int count = rs.getInt(2);
+                            resultMap.put(columnValue, count);
                         }
-                        if (resultList.isEmpty()) {
+                        if (resultMap.isEmpty()) {
                             return null;
                         }
-                        return resultList;
+                        return resultMap;
                     }
                 }
             }

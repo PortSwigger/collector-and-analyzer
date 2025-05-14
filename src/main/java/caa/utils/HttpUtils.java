@@ -18,20 +18,16 @@ public class HttpUtils {
         this.configLoader = configLoader;
     }
 
-    public String decodeParameter(String input) {
-        try {
-            input = api.utilities().urlUtils().decode(input);
-        } catch (Exception ignored) {
-        }
-        return input;
-    }
-
     public static String replaceFirstOccurrence(String original, String find, String replace) {
         int index = original.indexOf(find);
         if (index != -1) {
             return original.substring(0, index) + replace + original.substring(index + find.length());
         }
         return original;
+    }
+
+    public static boolean matchHostIsIp(String host) {
+        return host.matches("\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b");
     }
 
     public static boolean matchFromEnd(String input, String pattern) {
@@ -51,6 +47,14 @@ public class HttpUtils {
 
         // 如果patternIndex为-1，表示pattern字符串已经完全匹配
         return patternIndex == -1;
+    }
+
+    public String decodeParameter(String input) {
+        try {
+            input = api.utilities().urlUtils().decode(input);
+        } catch (Exception ignored) {
+        }
+        return input;
     }
 
     public String getHostByUrl(String url) {
@@ -89,16 +93,29 @@ public class HttpUtils {
         boolean retStatus = false;
         try {
             String host = getHostByUrl(request.url());
-            String[] hostList = configLoader.getBlockHost().split("\\|");
-            boolean isBlockHost = isBlockHost(hostList, host);
 
-            List<String> suffixList = Arrays.asList(configLoader.getExcludeSuffix().split("\\|"));
-            boolean isExcludeSuffix = suffixList.contains(request.fileExtension().toLowerCase());
+            boolean isBlockHost = false;
+            String blockHost = configLoader.getBlockHost();
+            if (!blockHost.isBlank()) {
+                String[] hostList = configLoader.getBlockHost().split("\\|");
+                isBlockHost = isBlockHost(hostList, host);
+            }
+
+            boolean isExcludeSuffix = false;
+            String suffix = configLoader.getExcludeSuffix();
+            if (!suffix.isBlank()) {
+                List<String> suffixList = Arrays.asList(configLoader.getExcludeSuffix().split("\\|"));
+                isExcludeSuffix = suffixList.contains(request.fileExtension().toLowerCase());
+            }
 
             boolean isToolScope = !configLoader.getScope().contains(toolType);
 
-            List<String> statusList = Arrays.asList(configLoader.getExcludeStatus().split("\\|"));
-            boolean isExcludeStatus = statusList.contains(String.valueOf(response.statusCode()));
+            boolean isExcludeStatus = false;
+            String status = configLoader.getExcludeStatus();
+            if (!status.isBlank()) {
+                List<String> statusList = Arrays.asList(configLoader.getExcludeStatus().split("\\|"));
+                isExcludeStatus = statusList.contains(String.valueOf(response.statusCode()));
+            }
 
             retStatus = isExcludeSuffix || isBlockHost || isToolScope || isExcludeStatus;
         } catch (Exception ignored) {
